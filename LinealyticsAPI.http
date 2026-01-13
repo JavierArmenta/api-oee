@@ -1,0 +1,6 @@
+@LinealyticsAPI_HostAddress = http://localhost:5160
+
+GET {{LinealyticsAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
