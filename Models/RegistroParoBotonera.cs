@@ -7,6 +7,7 @@ public class RegistroParoBotonera
     public int DepartamentoId { get; set; }
     public int? OperadorId { get; set; }
     public int? BotonId { get; set; }
+    public int BotoneraId { get; set; }
     public DateTime FechaHoraInicio { get; set; }
     public DateTime? FechaHoraFin { get; set; }
     public int? DuracionMinutos { get; set; }

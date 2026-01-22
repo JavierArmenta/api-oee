@@ -89,26 +89,40 @@ public class ParosLineaController : ControllerBase
                 operadorId = request.OperadorId.Value;
             }
 
-            // Buscar si existe un paro abierto para esta máquina y departamento
+            // Buscar si existe un paro abierto para esta botonera (solo uno permitido por botonera)
             var paroAbierto = await _context.RegistrosParoBotonera
-                .Where(p => p.MaquinaId == maquinaId
-                         && p.DepartamentoId == departamentoId
+                .Where(p => p.BotoneraId == botonera.Id
                          && p.Estado == "Abierto")
                 .OrderByDescending(p => p.FechaHoraInicio)
                 .FirstOrDefaultAsync();
 
             if (paroAbierto != null)
             {
-                // CERRAR el paro existente
+                // Verificar que el botón sea el mismo que abrió el paro
+                if (paroAbierto.BotonId != botonId)
+                {
+                    _logger.LogWarning("Intento de cerrar paro {ParoId} con botón diferente. BotonId original: {BotonIdOriginal}, BotonId recibido: {BotonIdRecibido}",
+                        paroAbierto.Id, paroAbierto.BotonId, botonId);
+
+                    return BadRequest(new ParoLineaResponse
+                    {
+                        Exitoso = false,
+                        Mensaje = $"No se puede cerrar el paro con un botón diferente. Use el mismo botón que lo abrió.",
+                        ParoId = paroAbierto.Id,
+                        Estado = "Abierto"
+                    });
+                }
+
+                // CERRAR el paro existente (mismo botón)
                 paroAbierto.FechaHoraFin = DateTime.UtcNow;
                 paroAbierto.Estado = "Cerrado";
                 paroAbierto.DuracionMinutos = (int)(paroAbierto.FechaHoraFin.Value - paroAbierto.FechaHoraInicio).TotalMinutes;
 
-                // Actualizar OperadorId
-                paroAbierto.OperadorId = operadorId;
-
-                // Actualizar BotonId
-                paroAbierto.BotonId = botonId;
+                // Actualizar OperadorId si se proporciona
+                if (operadorId.HasValue)
+                {
+                    paroAbierto.OperadorId = operadorId;
+                }
 
                 await _context.SaveChangesAsync();
 
@@ -133,6 +147,7 @@ public class ParosLineaController : ControllerBase
                     DepartamentoId = departamentoId,
                     OperadorId = operadorId,
                     BotonId = botonId,
+                    BotoneraId = botonera.Id,
                     FechaHoraInicio = DateTime.UtcNow,
                     Estado = "Abierto"
                 };
