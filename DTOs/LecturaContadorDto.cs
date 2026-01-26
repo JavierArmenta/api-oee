@@ -1,24 +1,27 @@
 namespace LinealyticsAPI.DTOs;
 
-// Request para insertar una lectura
-public class InsertarLecturaRequest
+// Request para registrar una lectura
+public class RegistrarLecturaRequest
 {
-    public int ContadorDispositivoId { get; set; }
-    public int? ProductoId { get; set; }
-    public long Valor { get; set; }
+    public int MaquinaId { get; set; }
+    public string CodigoProducto { get; set; } = string.Empty;
+    public long OK { get; set; }
+    public long NOK { get; set; }
 }
 
-// Response de insertar lectura
+// Response de registrar lectura
 public class LecturaResponse
 {
     public bool Exitoso { get; set; }
     public string Mensaje { get; set; } = string.Empty;
     public int? LecturaId { get; set; }
     public int? CorridaId { get; set; }
-    public long ProduccionIncremental { get; set; }
-    public long ProduccionTotalCorrida { get; set; }
-    public bool EsReset { get; set; }
-    public bool EsRuido { get; set; }
+    public long ProduccionOK { get; set; }
+    public long ProduccionNOK { get; set; }
+    public long ProduccionTotalCorridaOK { get; set; }
+    public long ProduccionTotalCorridaNOK { get; set; }
+    public bool EsResetOK { get; set; }
+    public bool EsResetNOK { get; set; }
     public bool NuevaCorridaCreada { get; set; }
     public bool CorridaCerrada { get; set; }
 }
@@ -28,14 +31,23 @@ public class LecturaContadorDto
 {
     public int Id { get; set; }
     public int CorridaId { get; set; }
-    public int ContadorDispositivoId { get; set; }
-    public int? ProductoId { get; set; }
-    public long ContadorValor { get; set; }
-    public long? ContadorAnterior { get; set; }
-    public long Diferencia { get; set; }
-    public long ProduccionIncremental { get; set; }
-    public bool EsReset { get; set; }
-    public bool EsRuido { get; set; }
+    public int MaquinaId { get; set; }
+    public int ProductoId { get; set; }
+
+    // Contador OK
+    public long ContadorOK { get; set; }
+    public long? ContadorOKAnterior { get; set; }
+    public long DiferenciaOK { get; set; }
+    public long ProduccionOK { get; set; }
+    public bool EsResetOK { get; set; }
+
+    // Contador NOK
+    public long ContadorNOK { get; set; }
+    public long? ContadorNOKAnterior { get; set; }
+    public long DiferenciaNOK { get; set; }
+    public long ProduccionNOK { get; set; }
+    public bool EsResetNOK { get; set; }
+
     public DateTime FechaHoraLectura { get; set; }
 }
 
@@ -43,78 +55,61 @@ public class LecturaContadorDto
 public class CorridaProduccionDto
 {
     public int Id { get; set; }
-    public int ContadorDispositivoId { get; set; }
-    public string? ContadorNombre { get; set; }
-    public int? ProductoId { get; set; }
+    public int MaquinaId { get; set; }
+    public string? MaquinaNombre { get; set; }
+    public int ProductoId { get; set; }
+    public string? ProductoCodigo { get; set; }
     public string? ProductoNombre { get; set; }
     public DateTime FechaInicio { get; set; }
     public DateTime? FechaFin { get; set; }
-    public long ContadorInicial { get; set; }
-    public long ContadorFinal { get; set; }
-    public long ProduccionTotal { get; set; }
-    public int NumeroResets { get; set; }
+
+    // Contadores OK
+    public long ContadorOKInicial { get; set; }
+    public long ContadorOKFinal { get; set; }
+    public long ProduccionOK { get; set; }
+    public int NumeroResetsOK { get; set; }
+
+    // Contadores NOK
+    public long ContadorNOKInicial { get; set; }
+    public long ContadorNOKFinal { get; set; }
+    public long ProduccionNOK { get; set; }
+    public int NumeroResetsNOK { get; set; }
+
     public int NumeroLecturas { get; set; }
     public string Estado { get; set; } = string.Empty;
     public int? DuracionMinutos { get; set; }
 }
 
-// Request para histórico
-public class HistoricoRequest
-{
-    public DateTime? Desde { get; set; }
-    public DateTime? Hasta { get; set; }
-    public string Granularidad { get; set; } = "hora"; // hora, dia
-}
-
 // Response para histórico (gráficas)
 public class HistoricoResponse
 {
-    public int ContadorDispositivoId { get; set; }
-    public string ContadorNombre { get; set; } = string.Empty;
+    public int MaquinaId { get; set; }
+    public string MaquinaNombre { get; set; } = string.Empty;
     public DateTime Desde { get; set; }
     public DateTime Hasta { get; set; }
-    public string Granularidad { get; set; } = string.Empty;
-    public List<DatoHistorico> Datos { get; set; } = new();
-    public long TotalProduccion { get; set; }
-    public int TotalResets { get; set; }
-}
-
-public class DatoHistorico
-{
-    public DateTime Periodo { get; set; }
-    public long Produccion { get; set; }
-    public int Resets { get; set; }
-    public int Lecturas { get; set; }
-    public long? ContadorInicio { get; set; }
-    public long? ContadorFin { get; set; }
+    public List<LecturaContadorDto> Lecturas { get; set; } = new();
+    public long TotalProduccionOK { get; set; }
+    public long TotalProduccionNOK { get; set; }
+    public int TotalResetsOK { get; set; }
+    public int TotalResetsNOK { get; set; }
 }
 
 // Response para lecturas en tiempo real
 public class LecturasRealtimeResponse
 {
-    public int ContadorDispositivoId { get; set; }
-    public string ContadorNombre { get; set; } = string.Empty;
+    public int MaquinaId { get; set; }
+    public string MaquinaNombre { get; set; } = string.Empty;
+    public CorridaProduccionDto? CorridaActiva { get; set; }
     public List<PuntoLectura> Lecturas { get; set; } = new();
 }
 
 public class PuntoLectura
 {
     public DateTime FechaHora { get; set; }
-    public long Valor { get; set; }
-    public long ProduccionIncremental { get; set; }
-    public bool EsReset { get; set; }
-}
-
-// DTO para contador dispositivo
-public class ContadorDispositivoDto
-{
-    public int Id { get; set; }
-    public int MaquinaId { get; set; }
-    public string? MaquinaNombre { get; set; }
-    public string Nombre { get; set; } = string.Empty;
-    public string? Descripcion { get; set; }
-    public string TipoContador { get; set; } = string.Empty;
-    public bool Activo { get; set; }
-    public DateTime FechaCreacion { get; set; }
-    public CorridaProduccionDto? CorridaActiva { get; set; }
+    public long ContadorOK { get; set; }
+    public long ContadorNOK { get; set; }
+    public long ProduccionOK { get; set; }
+    public long ProduccionNOK { get; set; }
+    public bool EsResetOK { get; set; }
+    public bool EsResetNOK { get; set; }
 }

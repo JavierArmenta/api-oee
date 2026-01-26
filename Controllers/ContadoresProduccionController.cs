@@ -12,7 +12,6 @@ public class ContadoresProduccionController : ControllerBase
 {
     private readonly LinealyticsDbContext _context;
     private readonly ILogger<ContadoresProduccionController> _logger;
-    private const int THRESHOLD_RUIDO = 5;
 
     public ContadoresProduccionController(LinealyticsDbContext context, ILogger<ContadoresProduccionController> logger)
     {
@@ -26,85 +25,96 @@ public class ContadoresProduccionController : ControllerBase
     /// - Detección de cambios de producto
     /// - Detección de resets
     /// - Cálculo de producción incremental
-    /// - Actualización de resúmenes
     /// </summary>
     [HttpPost("lectura")]
     [ProducesResponseType(typeof(LecturaResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<LecturaResponse>> RegistrarLectura([FromBody] InsertarLecturaRequest request)
+    public async Task<ActionResult<LecturaResponse>> RegistrarLectura([FromBody] RegistrarLecturaRequest request)
     {
         try
         {
-            // Validar contador dispositivo
-            if (request.ContadorDispositivoId <= 0)
+            // Validar MaquinaId
+            if (request.MaquinaId <= 0)
             {
                 return BadRequest(new LecturaResponse
                 {
                     Exitoso = false,
-                    Mensaje = "ContadorDispositivoId debe ser mayor a 0"
+                    Mensaje = "MaquinaId debe ser mayor a 0"
                 });
             }
 
-            // Verificar que el contador existe
-            var contadorExiste = await _context.ContadoresDispositivo
-                .AnyAsync(c => c.Id == request.ContadorDispositivoId && c.Activo);
+            // Verificar que la máquina existe
+            var maquinaExiste = await _context.Maquinas
+                .AnyAsync(m => m.Id == request.MaquinaId);
 
-            if (!contadorExiste)
+            if (!maquinaExiste)
             {
                 return BadRequest(new LecturaResponse
                 {
                     Exitoso = false,
-                    Mensaje = $"No se encontró el contador con ID {request.ContadorDispositivoId} o está inactivo"
+                    Mensaje = $"No se encontró la máquina con ID {request.MaquinaId}"
                 });
             }
 
-            // Validar que el producto existe si se proporciona
-            if (request.ProductoId.HasValue)
+            // Buscar producto por código
+            if (string.IsNullOrWhiteSpace(request.CodigoProducto))
             {
-                var productoExiste = await _context.Productos
-                    .AnyAsync(p => p.Id == request.ProductoId.Value && p.Activo);
-
-                if (!productoExiste)
+                return BadRequest(new LecturaResponse
                 {
-                    return BadRequest(new LecturaResponse
-                    {
-                        Exitoso = false,
-                        Mensaje = $"No se encontró el producto con ID {request.ProductoId.Value} o está inactivo"
-                    });
-                }
+                    Exitoso = false,
+                    Mensaje = "CodigoProducto es requerido"
+                });
+            }
+
+            var producto = await _context.Productos
+                .FirstOrDefaultAsync(p => p.Codigo == request.CodigoProducto && p.Activo);
+
+            if (producto == null)
+            {
+                return BadRequest(new LecturaResponse
+                {
+                    Exitoso = false,
+                    Mensaje = $"No se encontró el producto con código '{request.CodigoProducto}' o está inactivo"
+                });
             }
 
             var ahora = DateTime.UtcNow;
-            var fechaHoy = DateOnly.FromDateTime(ahora);
-            var horaActual = ahora.Hour;
 
-            // Buscar corrida activa para este contador
+            // Buscar corrida activa para esta máquina
             var corridaActiva = await _context.CorridasProduccion
-                .Where(c => c.ContadorDispositivoId == request.ContadorDispositivoId && c.Estado == "Activa")
+                .Where(c => c.MaquinaId == request.MaquinaId && c.Estado == "Activa")
                 .OrderByDescending(c => c.FechaInicio)
                 .FirstOrDefaultAsync();
 
             bool nuevaCorridaCreada = false;
             bool corridaCerrada = false;
-            long produccionIncremental = 0;
-            bool esReset = false;
-            bool esRuido = false;
-            long? contadorAnterior = null;
-            long diferencia = 0;
+            long produccionOK = 0;
+            long produccionNOK = 0;
+            bool esResetOK = false;
+            bool esResetNOK = false;
+            long? contadorOKAnterior = null;
+            long? contadorNOKAnterior = null;
+            long diferenciaOK = 0;
+            long diferenciaNOK = 0;
 
             // CASO 1: No hay corrida activa - crear nueva
             if (corridaActiva == null)
             {
                 corridaActiva = new CorridaProduccion
                 {
-                    ContadorDispositivoId = request.ContadorDispositivoId,
-                    ProductoId = request.ProductoId,
+                    MaquinaId = request.MaquinaId,
+                    ProductoId = producto.Id,
                     FechaInicio = ahora,
-                    ContadorInicial = request.Valor,
-                    ContadorFinal = request.Valor,
-                    UltimoContadorValor = request.Valor,
-                    ProduccionTotal = 0,
-                    NumeroResets = 0,
+                    ContadorOKInicial = request.OK,
+                    ContadorOKFinal = request.OK,
+                    UltimoContadorOK = request.OK,
+                    ContadorNOKInicial = request.NOK,
+                    ContadorNOKFinal = request.NOK,
+                    UltimoContadorNOK = request.NOK,
+                    ProduccionOK = 0,
+                    ProduccionNOK = 0,
+                    NumeroResetsOK = 0,
+                    NumeroResetsNOK = 0,
                     NumeroLecturas = 0,
                     Estado = "Activa"
                 };
@@ -113,34 +123,40 @@ public class ContadoresProduccionController : ControllerBase
                 await _context.SaveChangesAsync();
 
                 nuevaCorridaCreada = true;
-                produccionIncremental = 0;
 
-                _logger.LogInformation("Nueva corrida {CorridaId} creada para contador {ContadorId}, producto {ProductoId}, baseline={Valor}",
-                    corridaActiva.Id, request.ContadorDispositivoId, request.ProductoId, request.Valor);
+                _logger.LogInformation(
+                    "Nueva corrida {CorridaId} creada para máquina {MaquinaId}, producto {ProductoCodigo}, baseline OK={OK} NOK={NOK}",
+                    corridaActiva.Id, request.MaquinaId, request.CodigoProducto, request.OK, request.NOK);
             }
             // CASO 2: Cambió el producto - cerrar corrida actual y crear nueva
-            else if (corridaActiva.ProductoId != request.ProductoId)
+            else if (corridaActiva.ProductoId != producto.Id)
             {
                 // Cerrar corrida actual
                 corridaActiva.FechaFin = ahora;
                 corridaActiva.Estado = "Cerrada";
 
-                _logger.LogInformation("Corrida {CorridaId} cerrada por cambio de producto. Producción total: {Produccion}",
-                    corridaActiva.Id, corridaActiva.ProduccionTotal);
+                _logger.LogInformation(
+                    "Corrida {CorridaId} cerrada por cambio de producto. Producción OK: {OK}, NOK: {NOK}",
+                    corridaActiva.Id, corridaActiva.ProduccionOK, corridaActiva.ProduccionNOK);
 
                 corridaCerrada = true;
 
                 // Crear nueva corrida
                 var nuevaCorrida = new CorridaProduccion
                 {
-                    ContadorDispositivoId = request.ContadorDispositivoId,
-                    ProductoId = request.ProductoId,
+                    MaquinaId = request.MaquinaId,
+                    ProductoId = producto.Id,
                     FechaInicio = ahora,
-                    ContadorInicial = request.Valor,
-                    ContadorFinal = request.Valor,
-                    UltimoContadorValor = request.Valor,
-                    ProduccionTotal = 0,
-                    NumeroResets = 0,
+                    ContadorOKInicial = request.OK,
+                    ContadorOKFinal = request.OK,
+                    UltimoContadorOK = request.OK,
+                    ContadorNOKInicial = request.NOK,
+                    ContadorNOKFinal = request.NOK,
+                    UltimoContadorNOK = request.NOK,
+                    ProduccionOK = 0,
+                    ProduccionNOK = 0,
+                    NumeroResetsOK = 0,
+                    NumeroResetsNOK = 0,
                     NumeroLecturas = 0,
                     Estado = "Activa"
                 };
@@ -150,50 +166,62 @@ public class ContadoresProduccionController : ControllerBase
 
                 corridaActiva = nuevaCorrida;
                 nuevaCorridaCreada = true;
-                produccionIncremental = 0;
 
-                _logger.LogInformation("Nueva corrida {CorridaId} creada para producto {ProductoId}, baseline={Valor}",
-                    corridaActiva.Id, request.ProductoId, request.Valor);
+                _logger.LogInformation(
+                    "Nueva corrida {CorridaId} creada para producto {ProductoCodigo}, baseline OK={OK} NOK={NOK}",
+                    corridaActiva.Id, request.CodigoProducto, request.OK, request.NOK);
             }
-            // CASO 3: Mismo producto - calcular incremento
+            // CASO 3: Mismo producto - calcular incrementos
             else
             {
-                contadorAnterior = corridaActiva.UltimoContadorValor;
-                diferencia = request.Valor - contadorAnterior.Value;
+                contadorOKAnterior = corridaActiva.UltimoContadorOK;
+                contadorNOKAnterior = corridaActiva.UltimoContadorNOK;
+                diferenciaOK = request.OK - contadorOKAnterior.Value;
+                diferenciaNOK = request.NOK - contadorNOKAnterior.Value;
 
-                if (diferencia < 0)
+                // Procesar contador OK
+                if (diferenciaOK < 0)
                 {
-                    // Decremento detectado
-                    if (Math.Abs(diferencia) <= THRESHOLD_RUIDO)
-                    {
-                        // Es ruido - ignorar
-                        esRuido = true;
-                        produccionIncremental = 0;
+                    // Reset detectado en OK
+                    esResetOK = true;
+                    produccionOK = 0;
+                    corridaActiva.NumeroResetsOK++;
 
-                        _logger.LogDebug("Ruido detectado en contador {ContadorId}: diferencia={Diferencia}",
-                            request.ContadorDispositivoId, diferencia);
-                    }
-                    else
-                    {
-                        // Es reset
-                        esReset = true;
-                        produccionIncremental = 0;
-                        corridaActiva.NumeroResets++;
-
-                        _logger.LogInformation("RESET detectado en contador {ContadorId}: {Anterior} -> {Actual}",
-                            request.ContadorDispositivoId, contadorAnterior, request.Valor);
-                    }
+                    _logger.LogInformation(
+                        "RESET OK detectado en máquina {MaquinaId}: {Anterior} -> {Actual}",
+                        request.MaquinaId, contadorOKAnterior, request.OK);
                 }
                 else
                 {
-                    // Incremento normal
-                    produccionIncremental = diferencia;
-                    corridaActiva.ProduccionTotal += produccionIncremental;
+                    // Incremento normal OK
+                    produccionOK = diferenciaOK;
+                    corridaActiva.ProduccionOK += produccionOK;
                 }
 
-                // Actualizar corrida
-                corridaActiva.UltimoContadorValor = request.Valor;
-                corridaActiva.ContadorFinal = request.Valor;
+                // Procesar contador NOK
+                if (diferenciaNOK < 0)
+                {
+                    // Reset detectado en NOK
+                    esResetNOK = true;
+                    produccionNOK = 0;
+                    corridaActiva.NumeroResetsNOK++;
+
+                    _logger.LogInformation(
+                        "RESET NOK detectado en máquina {MaquinaId}: {Anterior} -> {Actual}",
+                        request.MaquinaId, contadorNOKAnterior, request.NOK);
+                }
+                else
+                {
+                    // Incremento normal NOK
+                    produccionNOK = diferenciaNOK;
+                    corridaActiva.ProduccionNOK += produccionNOK;
+                }
+
+                // Actualizar valores finales de la corrida
+                corridaActiva.UltimoContadorOK = request.OK;
+                corridaActiva.UltimoContadorNOK = request.NOK;
+                corridaActiva.ContadorOKFinal = request.OK;
+                corridaActiva.ContadorNOKFinal = request.NOK;
             }
 
             // Incrementar contador de lecturas
@@ -203,52 +231,52 @@ public class ContadoresProduccionController : ControllerBase
             var lectura = new LecturaContador
             {
                 CorridaId = corridaActiva.Id,
-                ContadorDispositivoId = request.ContadorDispositivoId,
-                ProductoId = request.ProductoId,
-                ContadorValor = request.Valor,
-                ContadorAnterior = contadorAnterior,
-                Diferencia = diferencia,
-                ProduccionIncremental = produccionIncremental,
-                EsReset = esReset,
-                EsRuido = esRuido,
+                MaquinaId = request.MaquinaId,
+                ProductoId = producto.Id,
+                ContadorOK = request.OK,
+                ContadorOKAnterior = contadorOKAnterior,
+                DiferenciaOK = diferenciaOK,
+                ProduccionOK = produccionOK,
+                EsResetOK = esResetOK,
+                ContadorNOK = request.NOK,
+                ContadorNOKAnterior = contadorNOKAnterior,
+                DiferenciaNOK = diferenciaNOK,
+                ProduccionNOK = produccionNOK,
+                EsResetNOK = esResetNOK,
                 FechaHoraLectura = ahora
             };
 
             _context.LecturasContador.Add(lectura);
-
-            // Actualizar resumen por hora
-            await ActualizarResumenHora(request.ContadorDispositivoId, request.ProductoId, fechaHoy, horaActual,
-                produccionIncremental, esReset, request.Valor);
-
-            // Actualizar resumen por día
-            await ActualizarResumenDia(request.ContadorDispositivoId, request.ProductoId, fechaHoy,
-                produccionIncremental, esReset, nuevaCorridaCreada, corridaCerrada);
-
             await _context.SaveChangesAsync();
 
-            _logger.LogInformation("Lectura {LecturaId} registrada: valor={Valor}, incremental={Incremental}, reset={Reset}, ruido={Ruido}",
-                lectura.Id, request.Valor, produccionIncremental, esReset, esRuido);
+            _logger.LogInformation(
+                "Lectura {LecturaId} registrada: OK={OK}(+{IncOK}), NOK={NOK}(+{IncNOK}), resetOK={ResetOK}, resetNOK={ResetNOK}",
+                lectura.Id, request.OK, produccionOK, request.NOK, produccionNOK, esResetOK, esResetNOK);
+
+            string mensaje = nuevaCorridaCreada ? "Lectura registrada (nueva corrida)" :
+                             corridaCerrada ? "Lectura registrada (corrida cerrada, nueva iniciada)" :
+                             (esResetOK || esResetNOK) ? "Lectura registrada (RESET detectado)" :
+                             "Lectura registrada";
 
             return Ok(new LecturaResponse
             {
                 Exitoso = true,
-                Mensaje = esReset ? "Lectura registrada (RESET detectado)" :
-                          esRuido ? "Lectura registrada (ruido ignorado)" :
-                          nuevaCorridaCreada ? "Lectura registrada (nueva corrida)" :
-                          "Lectura registrada",
+                Mensaje = mensaje,
                 LecturaId = lectura.Id,
                 CorridaId = corridaActiva.Id,
-                ProduccionIncremental = produccionIncremental,
-                ProduccionTotalCorrida = corridaActiva.ProduccionTotal,
-                EsReset = esReset,
-                EsRuido = esRuido,
+                ProduccionOK = produccionOK,
+                ProduccionNOK = produccionNOK,
+                ProduccionTotalCorridaOK = corridaActiva.ProduccionOK,
+                ProduccionTotalCorridaNOK = corridaActiva.ProduccionNOK,
+                EsResetOK = esResetOK,
+                EsResetNOK = esResetNOK,
                 NuevaCorridaCreada = nuevaCorridaCreada,
                 CorridaCerrada = corridaCerrada
             });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error al registrar lectura para contador {ContadorId}", request.ContadorDispositivoId);
+            _logger.LogError(ex, "Error al registrar lectura para máquina {MaquinaId}", request.MaquinaId);
             return StatusCode(500, new LecturaResponse
             {
                 Exitoso = false,
@@ -257,80 +285,13 @@ public class ContadoresProduccionController : ControllerBase
         }
     }
 
-    private async Task ActualizarResumenHora(int contadorId, int? productoId, DateOnly fecha, int hora,
-        long produccion, bool esReset, long valorContador)
-    {
-        var resumen = await _context.ResumenesProduccionHora
-            .FirstOrDefaultAsync(r => r.ContadorDispositivoId == contadorId && r.Fecha == fecha && r.Hora == hora);
-
-        if (resumen == null)
-        {
-            resumen = new ResumenProduccionHora
-            {
-                ContadorDispositivoId = contadorId,
-                ProductoId = productoId,
-                Fecha = fecha,
-                Hora = hora,
-                ProduccionTotal = produccion,
-                NumeroLecturas = 1,
-                NumeroResets = esReset ? 1 : 0,
-                ContadorInicio = valorContador,
-                ContadorFin = valorContador,
-                ValorMinimo = valorContador,
-                ValorMaximo = valorContador
-            };
-            _context.ResumenesProduccionHora.Add(resumen);
-        }
-        else
-        {
-            resumen.ProduccionTotal += produccion;
-            resumen.NumeroLecturas++;
-            if (esReset) resumen.NumeroResets++;
-            resumen.ContadorFin = valorContador;
-            if (valorContador < resumen.ValorMinimo) resumen.ValorMinimo = valorContador;
-            if (valorContador > resumen.ValorMaximo) resumen.ValorMaximo = valorContador;
-        }
-    }
-
-    private async Task ActualizarResumenDia(int contadorId, int? productoId, DateOnly fecha,
-        long produccion, bool esReset, bool corridaIniciada, bool corridaCerrada)
-    {
-        var resumen = await _context.ResumenesProduccionDia
-            .FirstOrDefaultAsync(r => r.ContadorDispositivoId == contadorId && r.Fecha == fecha);
-
-        if (resumen == null)
-        {
-            resumen = new ResumenProduccionDia
-            {
-                ContadorDispositivoId = contadorId,
-                ProductoId = productoId,
-                Fecha = fecha,
-                ProduccionTotal = produccion,
-                NumeroLecturas = 1,
-                NumeroResets = esReset ? 1 : 0,
-                NumeroCorridasIniciadas = corridaIniciada ? 1 : 0,
-                NumeroCorridasCerradas = corridaCerrada ? 1 : 0,
-                TiempoProduccionMinutos = 0
-            };
-            _context.ResumenesProduccionDia.Add(resumen);
-        }
-        else
-        {
-            resumen.ProduccionTotal += produccion;
-            resumen.NumeroLecturas++;
-            if (esReset) resumen.NumeroResets++;
-            if (corridaIniciada) resumen.NumeroCorridasIniciadas++;
-            if (corridaCerrada) resumen.NumeroCorridasCerradas++;
-        }
-    }
-
     /// <summary>
-    /// Obtiene las corridas de un contador
+    /// Obtiene las corridas de una máquina
     /// </summary>
-    [HttpGet("{contadorId}/corridas")]
+    [HttpGet("{maquinaId}/corridas")]
     [ProducesResponseType(typeof(List<CorridaProduccionDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<List<CorridaProduccionDto>>> ObtenerCorridas(
-        int contadorId,
+        int maquinaId,
         [FromQuery] DateTime? desde = null,
         [FromQuery] DateTime? hasta = null,
         [FromQuery] int limite = 50)
@@ -338,7 +299,7 @@ public class ContadoresProduccionController : ControllerBase
         try
         {
             var query = _context.CorridasProduccion
-                .Where(c => c.ContadorDispositivoId == contadorId);
+                .Where(c => c.MaquinaId == maquinaId);
 
             if (desde.HasValue)
                 query = query.Where(c => c.FechaInicio >= desde.Value);
@@ -352,14 +313,18 @@ public class ContadoresProduccionController : ControllerBase
                 .Select(c => new CorridaProduccionDto
                 {
                     Id = c.Id,
-                    ContadorDispositivoId = c.ContadorDispositivoId,
+                    MaquinaId = c.MaquinaId,
                     ProductoId = c.ProductoId,
                     FechaInicio = c.FechaInicio,
                     FechaFin = c.FechaFin,
-                    ContadorInicial = c.ContadorInicial,
-                    ContadorFinal = c.ContadorFinal,
-                    ProduccionTotal = c.ProduccionTotal,
-                    NumeroResets = c.NumeroResets,
+                    ContadorOKInicial = c.ContadorOKInicial,
+                    ContadorOKFinal = c.ContadorOKFinal,
+                    ProduccionOK = c.ProduccionOK,
+                    NumeroResetsOK = c.NumeroResetsOK,
+                    ContadorNOKInicial = c.ContadorNOKInicial,
+                    ContadorNOKFinal = c.ContadorNOKFinal,
+                    ProduccionNOK = c.ProduccionNOK,
+                    NumeroResetsNOK = c.NumeroResetsNOK,
                     NumeroLecturas = c.NumeroLecturas,
                     Estado = c.Estado,
                     DuracionMinutos = c.FechaFin.HasValue ?
@@ -371,35 +336,39 @@ public class ContadoresProduccionController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error al obtener corridas para contador {ContadorId}", contadorId);
+            _logger.LogError(ex, "Error al obtener corridas para máquina {MaquinaId}", maquinaId);
             return StatusCode(500, new List<CorridaProduccionDto>());
         }
     }
 
     /// <summary>
-    /// Obtiene la corrida activa de un contador
+    /// Obtiene la corrida activa de una máquina
     /// </summary>
-    [HttpGet("{contadorId}/corrida-activa")]
+    [HttpGet("{maquinaId}/corrida-activa")]
     [ProducesResponseType(typeof(CorridaProduccionDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<CorridaProduccionDto>> ObtenerCorridaActiva(int contadorId)
+    public async Task<ActionResult<CorridaProduccionDto>> ObtenerCorridaActiva(int maquinaId)
     {
         try
         {
             var corrida = await _context.CorridasProduccion
-                .Where(c => c.ContadorDispositivoId == contadorId && c.Estado == "Activa")
+                .Where(c => c.MaquinaId == maquinaId && c.Estado == "Activa")
                 .OrderByDescending(c => c.FechaInicio)
                 .Select(c => new CorridaProduccionDto
                 {
                     Id = c.Id,
-                    ContadorDispositivoId = c.ContadorDispositivoId,
+                    MaquinaId = c.MaquinaId,
                     ProductoId = c.ProductoId,
                     FechaInicio = c.FechaInicio,
                     FechaFin = c.FechaFin,
-                    ContadorInicial = c.ContadorInicial,
-                    ContadorFinal = c.ContadorFinal,
-                    ProduccionTotal = c.ProduccionTotal,
-                    NumeroResets = c.NumeroResets,
+                    ContadorOKInicial = c.ContadorOKInicial,
+                    ContadorOKFinal = c.ContadorOKFinal,
+                    ProduccionOK = c.ProduccionOK,
+                    NumeroResetsOK = c.NumeroResetsOK,
+                    ContadorNOKInicial = c.ContadorNOKInicial,
+                    ContadorNOKFinal = c.ContadorNOKFinal,
+                    ProduccionNOK = c.ProduccionNOK,
+                    NumeroResetsNOK = c.NumeroResetsNOK,
                     NumeroLecturas = c.NumeroLecturas,
                     Estado = c.Estado
                 })
@@ -407,14 +376,14 @@ public class ContadoresProduccionController : ControllerBase
 
             if (corrida == null)
             {
-                return NotFound(new { mensaje = "No hay corrida activa para este contador" });
+                return NotFound(new { mensaje = "No hay corrida activa para esta máquina" });
             }
 
             return Ok(corrida);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error al obtener corrida activa para contador {ContadorId}", contadorId);
+            _logger.LogError(ex, "Error al obtener corrida activa para máquina {MaquinaId}", maquinaId);
             return StatusCode(500, new { mensaje = "Error interno" });
         }
     }
@@ -436,14 +405,18 @@ public class ContadoresProduccionController : ControllerBase
                 {
                     Id = l.Id,
                     CorridaId = l.CorridaId,
-                    ContadorDispositivoId = l.ContadorDispositivoId,
+                    MaquinaId = l.MaquinaId,
                     ProductoId = l.ProductoId,
-                    ContadorValor = l.ContadorValor,
-                    ContadorAnterior = l.ContadorAnterior,
-                    Diferencia = l.Diferencia,
-                    ProduccionIncremental = l.ProduccionIncremental,
-                    EsReset = l.EsReset,
-                    EsRuido = l.EsRuido,
+                    ContadorOK = l.ContadorOK,
+                    ContadorOKAnterior = l.ContadorOKAnterior,
+                    DiferenciaOK = l.DiferenciaOK,
+                    ProduccionOK = l.ProduccionOK,
+                    EsResetOK = l.EsResetOK,
+                    ContadorNOK = l.ContadorNOK,
+                    ContadorNOKAnterior = l.ContadorNOKAnterior,
+                    DiferenciaNOK = l.DiferenciaNOK,
+                    ProduccionNOK = l.ProduccionNOK,
+                    EsResetNOK = l.EsResetNOK,
                     FechaHoraLectura = l.FechaHoraLectura
                 })
                 .ToListAsync();
@@ -458,93 +431,73 @@ public class ContadoresProduccionController : ControllerBase
     }
 
     /// <summary>
-    /// Obtiene histórico de producción para gráficas
+    /// Obtiene histórico de lecturas para gráficas
     /// </summary>
-    [HttpGet("{contadorId}/historico")]
+    [HttpGet("{maquinaId}/historico")]
     [ProducesResponseType(typeof(HistoricoResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<HistoricoResponse>> ObtenerHistorico(
-        int contadorId,
+        int maquinaId,
         [FromQuery] DateTime? desde = null,
         [FromQuery] DateTime? hasta = null,
-        [FromQuery] string granularidad = "hora") // hora, dia
+        [FromQuery] int limite = 1000)
     {
         try
         {
             var fechaHasta = hasta ?? DateTime.UtcNow;
             var fechaDesde = desde ?? fechaHasta.AddDays(-7);
 
-            var contador = await _context.ContadoresDispositivo
-                .Where(c => c.Id == contadorId)
-                .Select(c => new { c.Id, c.Nombre })
+            var maquina = await _context.Maquinas
+                .Where(m => m.Id == maquinaId)
+                .Select(m => new { m.Id, m.Nombre })
                 .FirstOrDefaultAsync();
 
-            if (contador == null)
+            if (maquina == null)
             {
-                return NotFound(new { mensaje = "Contador no encontrado" });
+                return NotFound(new { mensaje = "Máquina no encontrada" });
             }
 
-            var response = new HistoricoResponse
+            var lecturas = await _context.LecturasContador
+                .Where(l => l.MaquinaId == maquinaId
+                         && l.FechaHoraLectura >= fechaDesde
+                         && l.FechaHoraLectura <= fechaHasta)
+                .OrderBy(l => l.FechaHoraLectura)
+                .Take(limite)
+                .Select(l => new LecturaContadorDto
+                {
+                    Id = l.Id,
+                    CorridaId = l.CorridaId,
+                    MaquinaId = l.MaquinaId,
+                    ProductoId = l.ProductoId,
+                    ContadorOK = l.ContadorOK,
+                    ContadorOKAnterior = l.ContadorOKAnterior,
+                    DiferenciaOK = l.DiferenciaOK,
+                    ProduccionOK = l.ProduccionOK,
+                    EsResetOK = l.EsResetOK,
+                    ContadorNOK = l.ContadorNOK,
+                    ContadorNOKAnterior = l.ContadorNOKAnterior,
+                    DiferenciaNOK = l.DiferenciaNOK,
+                    ProduccionNOK = l.ProduccionNOK,
+                    EsResetNOK = l.EsResetNOK,
+                    FechaHoraLectura = l.FechaHoraLectura
+                })
+                .ToListAsync();
+
+            return Ok(new HistoricoResponse
             {
-                ContadorDispositivoId = contadorId,
-                ContadorNombre = contador.Nombre,
+                MaquinaId = maquinaId,
+                MaquinaNombre = maquina.Nombre,
                 Desde = fechaDesde,
                 Hasta = fechaHasta,
-                Granularidad = granularidad,
-                Datos = new List<DatoHistorico>()
-            };
-
-            if (granularidad == "hora")
-            {
-                var fechaDesdeOnly = DateOnly.FromDateTime(fechaDesde);
-                var fechaHastaOnly = DateOnly.FromDateTime(fechaHasta);
-
-                var resumenes = await _context.ResumenesProduccionHora
-                    .Where(r => r.ContadorDispositivoId == contadorId
-                             && r.Fecha >= fechaDesdeOnly
-                             && r.Fecha <= fechaHastaOnly)
-                    .OrderBy(r => r.Fecha)
-                    .ThenBy(r => r.Hora)
-                    .ToListAsync();
-
-                response.Datos = resumenes.Select(r => new DatoHistorico
-                {
-                    Periodo = r.Fecha.ToDateTime(new TimeOnly(r.Hora, 0)),
-                    Produccion = r.ProduccionTotal,
-                    Resets = r.NumeroResets,
-                    Lecturas = r.NumeroLecturas,
-                    ContadorInicio = r.ContadorInicio,
-                    ContadorFin = r.ContadorFin
-                }).ToList();
-            }
-            else // dia
-            {
-                var fechaDesdeOnly = DateOnly.FromDateTime(fechaDesde);
-                var fechaHastaOnly = DateOnly.FromDateTime(fechaHasta);
-
-                var resumenes = await _context.ResumenesProduccionDia
-                    .Where(r => r.ContadorDispositivoId == contadorId
-                             && r.Fecha >= fechaDesdeOnly
-                             && r.Fecha <= fechaHastaOnly)
-                    .OrderBy(r => r.Fecha)
-                    .ToListAsync();
-
-                response.Datos = resumenes.Select(r => new DatoHistorico
-                {
-                    Periodo = r.Fecha.ToDateTime(TimeOnly.MinValue),
-                    Produccion = r.ProduccionTotal,
-                    Resets = r.NumeroResets,
-                    Lecturas = r.NumeroLecturas
-                }).ToList();
-            }
-
-            response.TotalProduccion = response.Datos.Sum(d => d.Produccion);
-            response.TotalResets = response.Datos.Sum(d => d.Resets);
-
-            return Ok(response);
+                Lecturas = lecturas,
+                TotalProduccionOK = lecturas.Sum(l => l.ProduccionOK),
+                TotalProduccionNOK = lecturas.Sum(l => l.ProduccionNOK),
+                TotalResetsOK = lecturas.Count(l => l.EsResetOK),
+                TotalResetsNOK = lecturas.Count(l => l.EsResetNOK)
+            });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error al obtener histórico para contador {ContadorId}", contadorId);
+            _logger.LogError(ex, "Error al obtener histórico para máquina {MaquinaId}", maquinaId);
             return StatusCode(500, new { mensaje = "Error interno" });
         }
     }
@@ -552,89 +505,74 @@ public class ContadoresProduccionController : ControllerBase
     /// <summary>
     /// Obtiene lecturas en tiempo real (últimos N minutos)
     /// </summary>
-    [HttpGet("{contadorId}/lecturas")]
+    [HttpGet("{maquinaId}/lecturas")]
     [ProducesResponseType(typeof(LecturasRealtimeResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<LecturasRealtimeResponse>> ObtenerLecturasRealtime(
-        int contadorId,
+        int maquinaId,
         [FromQuery] int ultimosMinutos = 120)
     {
         try
         {
             var desde = DateTime.UtcNow.AddMinutes(-ultimosMinutos);
 
-            var contador = await _context.ContadoresDispositivo
-                .Where(c => c.Id == contadorId)
-                .Select(c => new { c.Id, c.Nombre })
+            var maquina = await _context.Maquinas
+                .Where(m => m.Id == maquinaId)
+                .Select(m => new { m.Id, m.Nombre })
                 .FirstOrDefaultAsync();
 
-            if (contador == null)
+            if (maquina == null)
             {
-                return NotFound(new { mensaje = "Contador no encontrado" });
+                return NotFound(new { mensaje = "Máquina no encontrada" });
             }
 
+            var corridaActiva = await _context.CorridasProduccion
+                .Where(c => c.MaquinaId == maquinaId && c.Estado == "Activa")
+                .Select(c => new CorridaProduccionDto
+                {
+                    Id = c.Id,
+                    MaquinaId = c.MaquinaId,
+                    ProductoId = c.ProductoId,
+                    FechaInicio = c.FechaInicio,
+                    ContadorOKInicial = c.ContadorOKInicial,
+                    ContadorOKFinal = c.ContadorOKFinal,
+                    ProduccionOK = c.ProduccionOK,
+                    NumeroResetsOK = c.NumeroResetsOK,
+                    ContadorNOKInicial = c.ContadorNOKInicial,
+                    ContadorNOKFinal = c.ContadorNOKFinal,
+                    ProduccionNOK = c.ProduccionNOK,
+                    NumeroResetsNOK = c.NumeroResetsNOK,
+                    NumeroLecturas = c.NumeroLecturas,
+                    Estado = c.Estado
+                })
+                .FirstOrDefaultAsync();
+
             var lecturas = await _context.LecturasContador
-                .Where(l => l.ContadorDispositivoId == contadorId && l.FechaHoraLectura >= desde)
+                .Where(l => l.MaquinaId == maquinaId && l.FechaHoraLectura >= desde)
                 .OrderBy(l => l.FechaHoraLectura)
                 .Select(l => new PuntoLectura
                 {
                     FechaHora = l.FechaHoraLectura,
-                    Valor = l.ContadorValor,
-                    ProduccionIncremental = l.ProduccionIncremental,
-                    EsReset = l.EsReset
+                    ContadorOK = l.ContadorOK,
+                    ContadorNOK = l.ContadorNOK,
+                    ProduccionOK = l.ProduccionOK,
+                    ProduccionNOK = l.ProduccionNOK,
+                    EsResetOK = l.EsResetOK,
+                    EsResetNOK = l.EsResetNOK
                 })
                 .ToListAsync();
 
             return Ok(new LecturasRealtimeResponse
             {
-                ContadorDispositivoId = contadorId,
-                ContadorNombre = contador.Nombre,
+                MaquinaId = maquinaId,
+                MaquinaNombre = maquina.Nombre,
+                CorridaActiva = corridaActiva,
                 Lecturas = lecturas
             });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error al obtener lecturas realtime para contador {ContadorId}", contadorId);
+            _logger.LogError(ex, "Error al obtener lecturas realtime para máquina {MaquinaId}", maquinaId);
             return StatusCode(500, new { mensaje = "Error interno" });
         }
     }
-
-    /// <summary>
-    /// Obtiene todos los contadores dispositivo
-    /// </summary>
-    [HttpGet("dispositivos")]
-    [ProducesResponseType(typeof(List<ContadorDispositivoDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<List<ContadorDispositivoDto>>> ObtenerDispositivos([FromQuery] int? maquinaId = null)
-    {
-        try
-        {
-            var query = _context.ContadoresDispositivo.AsQueryable();
-
-            if (maquinaId.HasValue)
-                query = query.Where(c => c.MaquinaId == maquinaId.Value);
-
-            var contadores = await query
-                .Where(c => c.Activo)
-                .OrderBy(c => c.MaquinaId)
-                .ThenBy(c => c.Nombre)
-                .Select(c => new ContadorDispositivoDto
-                {
-                    Id = c.Id,
-                    MaquinaId = c.MaquinaId,
-                    Nombre = c.Nombre,
-                    Descripcion = c.Descripcion,
-                    TipoContador = c.TipoContador,
-                    Activo = c.Activo,
-                    FechaCreacion = c.FechaCreacion
-                })
-                .ToListAsync();
-
-            return Ok(contadores);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al obtener dispositivos");
-            return StatusCode(500, new List<ContadorDispositivoDto>());
-        }
-    }
-
 }
