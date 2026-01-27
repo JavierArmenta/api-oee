@@ -33,28 +33,30 @@ public class ContadoresProduccionController : ControllerBase
     {
         try
         {
-            // Validar MaquinaId
-            if (request.MaquinaId <= 0)
+            // Validar CodigoMaquina
+            if (string.IsNullOrWhiteSpace(request.CodigoMaquina))
             {
                 return BadRequest(new LecturaResponse
                 {
                     Exitoso = false,
-                    Mensaje = "MaquinaId debe ser mayor a 0"
+                    Mensaje = "CodigoMaquina es requerido"
                 });
             }
 
-            // Verificar que la máquina existe
-            var maquinaExiste = await _context.Maquinas
-                .AnyAsync(m => m.Id == request.MaquinaId);
+            // Buscar máquina por código
+            var maquina = await _context.Maquinas
+                .FirstOrDefaultAsync(m => m.Codigo == request.CodigoMaquina && m.Activo);
 
-            if (!maquinaExiste)
+            if (maquina == null)
             {
                 return BadRequest(new LecturaResponse
                 {
                     Exitoso = false,
-                    Mensaje = $"No se encontró la máquina con ID {request.MaquinaId}"
+                    Mensaje = $"No se encontró la máquina con código '{request.CodigoMaquina}' o está inactiva"
                 });
             }
+
+            var maquinaId = maquina.Id;
 
             // Buscar producto por código
             if (string.IsNullOrWhiteSpace(request.CodigoProducto))
@@ -82,7 +84,7 @@ public class ContadoresProduccionController : ControllerBase
 
             // Buscar corrida activa para esta máquina
             var corridaActiva = await _context.CorridasProduccion
-                .Where(c => c.MaquinaId == request.MaquinaId && c.Estado == "Activa")
+                .Where(c => c.MaquinaId == maquinaId && c.Estado == "Activa")
                 .OrderByDescending(c => c.FechaInicio)
                 .FirstOrDefaultAsync();
 
@@ -102,7 +104,7 @@ public class ContadoresProduccionController : ControllerBase
             {
                 corridaActiva = new CorridaProduccion
                 {
-                    MaquinaId = request.MaquinaId,
+                    MaquinaId = maquinaId,
                     ProductoId = producto.Id,
                     FechaInicio = ahora,
                     ContadorOKInicial = request.OK,
@@ -126,7 +128,7 @@ public class ContadoresProduccionController : ControllerBase
 
                 _logger.LogInformation(
                     "Nueva corrida {CorridaId} creada para máquina {MaquinaId}, producto {ProductoCodigo}, baseline OK={OK} NOK={NOK}",
-                    corridaActiva.Id, request.MaquinaId, request.CodigoProducto, request.OK, request.NOK);
+                    corridaActiva.Id, maquinaId, request.CodigoProducto, request.OK, request.NOK);
             }
             // CASO 2: Cambió el producto - cerrar corrida actual y crear nueva
             else if (corridaActiva.ProductoId != producto.Id)
@@ -144,7 +146,7 @@ public class ContadoresProduccionController : ControllerBase
                 // Crear nueva corrida
                 var nuevaCorrida = new CorridaProduccion
                 {
-                    MaquinaId = request.MaquinaId,
+                    MaquinaId = maquinaId,
                     ProductoId = producto.Id,
                     FechaInicio = ahora,
                     ContadorOKInicial = request.OK,
@@ -189,7 +191,7 @@ public class ContadoresProduccionController : ControllerBase
 
                     _logger.LogInformation(
                         "RESET OK detectado en máquina {MaquinaId}: {Anterior} -> {Actual}",
-                        request.MaquinaId, contadorOKAnterior, request.OK);
+                        maquinaId, contadorOKAnterior, request.OK);
                 }
                 else
                 {
@@ -208,7 +210,7 @@ public class ContadoresProduccionController : ControllerBase
 
                     _logger.LogInformation(
                         "RESET NOK detectado en máquina {MaquinaId}: {Anterior} -> {Actual}",
-                        request.MaquinaId, contadorNOKAnterior, request.NOK);
+                        maquinaId, contadorNOKAnterior, request.NOK);
                 }
                 else
                 {
@@ -231,7 +233,7 @@ public class ContadoresProduccionController : ControllerBase
             var lectura = new LecturaContador
             {
                 CorridaId = corridaActiva.Id,
-                MaquinaId = request.MaquinaId,
+                MaquinaId = maquinaId,
                 ProductoId = producto.Id,
                 ContadorOK = request.OK,
                 ContadorOKAnterior = contadorOKAnterior,
@@ -276,7 +278,7 @@ public class ContadoresProduccionController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error al registrar lectura para máquina {MaquinaId}", request.MaquinaId);
+            _logger.LogError(ex, "Error al registrar lectura para máquina {CodigoMaquina}", request.CodigoMaquina);
             return StatusCode(500, new LecturaResponse
             {
                 Exitoso = false,

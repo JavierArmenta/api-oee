@@ -3,7 +3,7 @@ namespace LinealyticsAPI.DTOs;
 // Request para registrar una lectura
 public class RegistrarLecturaRequest
 {
-    public int MaquinaId { get; set; }
+    public string CodigoMaquina { get; set; } = string.Empty;
     public string CodigoProducto { get; set; } = string.Empty;
     public long OK { get; set; }
     public long NOK { get; set; }
