@@ -71,6 +71,15 @@ if (app.Environment.IsDevelopment() && enableSwagger)
     });
 }
 
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(5160); // HTTP
+    // Para HTTPS:
+    // options.ListenAnyIP(8443, o => o.UseHttps("rutaCert.pfx", "password"));
+});
+
+
 app.UseHttpsRedirection();
 app.UseCors("CorsPolicy");
 app.UseAuthorization();
