@@ -20,7 +20,7 @@ public class FallasController : ControllerBase
     }
 
     /// <summary>
-    /// Registra una falla específica en una máquina.
+    /// Registra una falla específica en una máquina usando IDs.
     /// La fecha y hora se calculan automáticamente por el sistema.
     /// </summary>
     [HttpPost("insertar")]
@@ -30,41 +30,134 @@ public class FallasController : ControllerBase
     {
         try
         {
-            if (request.FallaId <= 0 || request.MaquinaId <= 0)
+            if (request.CatalogoFallaId <= 0 || request.MaquinaId <= 0)
             {
                 return BadRequest(new FallaResponse
                 {
                     Exitoso = false,
-                    Mensaje = "FallaId y MaquinaId deben ser mayores a 0"
+                    Mensaje = "CatalogoFallaId y MaquinaId deben ser mayores a 0"
                 });
             }
 
+            var fechaDeteccion = DateTime.UtcNow;
             var falla = new RegistroFalla
             {
-                FallaId = request.FallaId,
+                CatalogoFallaId = request.CatalogoFallaId,
                 MaquinaId = request.MaquinaId,
-                ModeloId = request.ModeloId,
-                Descripcion = request.Descripcion,
-                FechaHoraLectura = DateTime.UtcNow  // Siempre calculado automáticamente
+                FechaHoraDeteccion = fechaDeteccion,
+                Estado = "Pendiente",
+                FechaCreacion = fechaDeteccion
             };
 
             _context.RegistrosFalla.Add(falla);
             await _context.SaveChangesAsync();
 
-            _logger.LogInformation("Falla {FallaRegistroId} registrada para máquina {MaquinaId} - FallaId: {FallaId}",
-                falla.Id, falla.MaquinaId, falla.FallaId);
+            _logger.LogInformation("Falla {FallaRegistroId} registrada para máquina {MaquinaId} - CatalogoFallaId: {CatalogoFallaId}",
+                falla.Id, falla.MaquinaId, falla.CatalogoFallaId);
 
             return CreatedAtAction(nameof(ObtenerUltimasFallas), new { limite = 1 }, new FallaResponse
             {
                 Exitoso = true,
                 Mensaje = "Falla registrada exitosamente",
                 FallaRegistroId = falla.Id,
-                FechaHoraLectura = falla.FechaHoraLectura
+                FechaHoraDeteccion = falla.FechaHoraDeteccion
             });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error al insertar falla");
+            return StatusCode(500, new FallaResponse
+            {
+                Exitoso = false,
+                Mensaje = "Error interno al registrar la falla"
+            });
+        }
+    }
+
+    /// <summary>
+    /// Registra una falla usando códigos de máquina y falla en lugar de IDs.
+    /// La fecha y hora se calculan automáticamente por el sistema.
+    /// </summary>
+    [HttpPost("insertar-por-codigo")]
+    [ProducesResponseType(typeof(FallaResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<FallaResponse>> InsertarFallaPorCodigo([FromBody] InsertarFallaPorCodigoRequest request)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.CodigoMaquina))
+            {
+                return BadRequest(new FallaResponse
+                {
+                    Exitoso = false,
+                    Mensaje = "CodigoMaquina es requerido"
+                });
+            }
+
+            if (string.IsNullOrWhiteSpace(request.CodigoFalla))
+            {
+                return BadRequest(new FallaResponse
+                {
+                    Exitoso = false,
+                    Mensaje = "CodigoFalla es requerido"
+                });
+            }
+
+            // Buscar máquina por código
+            var maquina = await _context.Maquinas
+                .FirstOrDefaultAsync(m => m.Codigo == request.CodigoMaquina && m.Activo);
+
+            if (maquina == null)
+            {
+                return NotFound(new FallaResponse
+                {
+                    Exitoso = false,
+                    Mensaje = $"No se encontró máquina activa con código '{request.CodigoMaquina}'"
+                });
+            }
+
+            // Buscar catálogo de falla por código
+            var catalogoFalla = await _context.CatalogoFallas
+                .FirstOrDefaultAsync(c => c.Codigo == request.CodigoFalla && c.Activo);
+
+            if (catalogoFalla == null)
+            {
+                return NotFound(new FallaResponse
+                {
+                    Exitoso = false,
+                    Mensaje = $"No se encontró falla activa con código '{request.CodigoFalla}'"
+                });
+            }
+
+            var fechaDeteccion = DateTime.UtcNow;
+            var falla = new RegistroFalla
+            {
+                CatalogoFallaId = catalogoFalla.Id,
+                MaquinaId = maquina.Id,
+                FechaHoraDeteccion = fechaDeteccion,
+                Estado = "Pendiente",
+                FechaCreacion = fechaDeteccion
+            };
+
+            _context.RegistrosFalla.Add(falla);
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "Falla registrada por código - Id: {FallaRegistroId}, Máquina: {CodigoMaquina} (Id:{MaquinaId}), Falla: {CodigoFalla} (Id:{CatalogoFallaId})",
+                falla.Id, request.CodigoMaquina, maquina.Id, request.CodigoFalla, catalogoFalla.Id);
+
+            return CreatedAtAction(nameof(ObtenerUltimasFallas), new { limite = 1 }, new FallaResponse
+            {
+                Exitoso = true,
+                Mensaje = $"Falla '{catalogoFalla.Nombre}' registrada en máquina '{maquina.Nombre}'",
+                FallaRegistroId = falla.Id,
+                FechaHoraDeteccion = falla.FechaHoraDeteccion
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error al insertar falla por código");
             return StatusCode(500, new FallaResponse
             {
                 Exitoso = false,
@@ -94,16 +187,15 @@ public class FallasController : ControllerBase
             }
 
             var fallas = await _context.RegistrosFalla
-                .OrderByDescending(f => f.FechaHoraLectura)
+                .OrderByDescending(f => f.FechaHoraDeteccion)
                 .Take(limite)
                 .Select(f => new FallaDto
                 {
                     Id = f.Id,
-                    FallaId = f.FallaId,
+                    CatalogoFallaId = f.CatalogoFallaId,
                     MaquinaId = f.MaquinaId,
-                    FechaHoraLectura = f.FechaHoraLectura,
-                    ModeloId = f.ModeloId,
-                    Descripcion = f.Descripcion
+                    FechaHoraDeteccion = f.FechaHoraDeteccion,
+                    Estado = f.Estado
                 })
                 .ToListAsync();
 

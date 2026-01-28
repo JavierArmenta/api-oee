@@ -24,6 +24,7 @@ public class LinealyticsDbContext : DbContext
     // Tablas de referencia (solo lectura, gestionadas desde webapp-oee)
     public DbSet<Maquina> Maquinas { get; set; }
     public DbSet<Producto> Productos { get; set; }
+    public DbSet<CatalogoFalla> CatalogoFallas { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -60,10 +61,10 @@ public class LinealyticsDbContext : DbContext
         {
             entity.ToTable("RegistrosFallas", "linealytics");
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.FallaId).IsRequired();
+            entity.Property(e => e.CatalogoFallaId).IsRequired();
             entity.Property(e => e.MaquinaId).IsRequired();
-            entity.Property(e => e.FechaHoraLectura).IsRequired();
-            entity.Property(e => e.Descripcion).HasMaxLength(500);
+            entity.Property(e => e.FechaHoraDeteccion).IsRequired();
+            entity.Property(e => e.Estado).HasMaxLength(20).IsRequired();
         });
 
         // Configuración de Botonera
@@ -135,6 +136,15 @@ public class LinealyticsDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Nombre).HasMaxLength(100).IsRequired();
             entity.Property(e => e.Codigo).HasMaxLength(50);
+        });
+
+        // Configuración de CatalogoFalla (referencia solo lectura - schema linealytics)
+        modelBuilder.Entity<CatalogoFalla>(entity =>
+        {
+            entity.ToTable("CatalogoFallas", "linealytics");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Codigo).HasMaxLength(50).IsRequired();
+            entity.Property(e => e.Nombre).HasMaxLength(200).IsRequired();
         });
     }
 }
