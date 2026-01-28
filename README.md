@@ -116,54 +116,6 @@ Obtiene todos los paros de línea actualmente abiertos.
 ]
 ```
 
-### Contadores
-
-#### POST /api/Contadores/insertar
-Registra contadores de producción (piezas OK y NOK).
-
-**Request Body:**
-```json
-{
-  "maquinaId": 1,
-  "contadorOK": 150,
-  "contadorNOK": 5,
-  "modeloId": 3,  // Opcional
-  "fechaHoraLectura": "2026-01-09T10:30:00Z"  // Opcional
-}
-```
-
-**Response:**
-```json
-{
-  "exitoso": true,
-  "mensaje": "Contador registrado exitosamente",
-  "contadorId": 42,
-  "totalUnidades": 155,
-  "porcentajeCalidad": 96.77,
-  "porcentajeDefectos": 3.23
-}
-```
-
-#### GET /api/Contadores/ultimos?limite=10
-Obtiene los últimos N contadores registrados.
-
-**Query Parameters:**
-- `limite` (opcional, default: 10): Número de registros a obtener
-
-**Response:**
-```json
-[
-  {
-    "id": 42,
-    "maquinaId": 1,
-    "contadorOK": 150,
-    "contadorNOK": 5,
-    "fechaHoraLectura": "2026-01-09T10:30:00Z",
-    "modeloId": 3
-  }
-]
-```
-
 ### Fallas
 
 #### POST /api/Fallas/insertar
@@ -249,13 +201,6 @@ curl -X POST "http://localhost:5160/api/ParosLinea/registrar" \
   -d '{"maquinaId": 1, "departamentoId": 2}'
 ```
 
-### Insertar contador
-```bash
-curl -X POST "http://localhost:5000/api/Contadores/insertar" \
-  -H "Content-Type: application/json" \
-  -d '{"maquinaId": 1, "contadorOK": 150, "contadorNOK": 5}'
-```
-
 ### Insertar falla
 ```bash
 curl -X POST "http://localhost:5000/api/Fallas/insertar" \
@@ -269,7 +214,7 @@ curl -X POST "http://localhost:5000/api/Fallas/insertar" \
 LinealyticsAPI/
 ├── Controllers/
 │   ├── ParosLineaController.cs    # Endpoints para paros de línea
-│   ├── ContadoresController.cs    # Endpoints para contadores
+│   ├── ContadoresProduccionController.cs    # Endpoints para corridas y lecturas de producción
 │   └── FallasController.cs        # Endpoints para fallas
 ├── Data/
 │   └── LinealyticsDbContext.cs    # Contexto de Entity Framework

@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # Base de datos PostgreSQL
+  postgres:
+    image: postgres:16-alpine
+    container_name: linealytics-db
+    environment:
+      POSTGRES_DB: webapp
+      POSTGRES_USER: webapp_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - linealytics-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U webapp_user -d webapp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API de Linealytics
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: linealytics-api
+    environment:
+      # Configuración de la base de datos
+      CONNECTION_STRING: "Host=postgres;Port=5432;Database=webapp;Username=webapp_user;Password=${DB_PASSWORD:-changeme}"
+
+      # CORS - Orígenes permitidos (separados por comas)
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
+
+      # Habilitar Swagger
+      ENABLE_SWAGGER: ${ENABLE_SWAGGER:-true}
+
+      # Configuración de ASP.NET Core
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ASPNETCORE_URLS: http://+:8080
+    ports:
+      - "5000:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - linealytics-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  linealytics-network:
+    driver: bridge

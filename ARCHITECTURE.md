@@ -22,7 +22,7 @@ API REST para monitoreo de producción manufacturera (OEE). Captura datos en tie
 api-oee/
 ├── Controllers/           # Endpoints de la API
 │   ├── ParosLineaController.cs    # Gestión de paros
-│   ├── ContadoresController.cs    # Contadores de producción
+│   ├── ContadoresProduccionController.cs    # Contadores y corridas de producción
 │   └── FallasController.cs        # Registro de fallas
 ├── Models/                # Entidades de base de datos
 │   ├── RegistroParoBotonera.cs    # Modelo de paro
@@ -63,27 +63,6 @@ api-oee/
 ```
 
 **Lógica Toggle:** Si no hay paro abierto para la **botonera** → abre nuevo. Si existe paro abierto **y el botón es el mismo** → lo cierra y calcula duración. **Solo se permite 1 paro abierto por botonera. Solo se puede cerrar con el mismo botón que lo abrió.**
-
----
-
-### Contadores `/api/Contadores`
-
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| POST | `/insertar` | Registra contador OK/NOK |
-| GET | `/ultimos?limite=10` | Últimos N registros |
-
-**Request POST /insertar:**
-```json
-{
-  "maquinaId": 1,
-  "contadorOK": 150,
-  "contadorNOK": 5,
-  "modeloId": 3
-}
-```
-
-**Cálculos automáticos:** Total = OK + NOK, % Calidad = OK/Total*100, % Defectos = NOK/Total*100
 
 ---
 
@@ -204,7 +183,7 @@ dotnet run
 |---------|-----------|
 | `Program.cs` | Configuración de servicios, CORS, Swagger |
 | `Controllers/ParosLineaController.cs` | Lógica toggle de paros |
-| `Controllers/ContadoresController.cs` | Métricas de producción |
+| `Controllers/ContadoresProduccionController.cs` | Gestión de corridas y lecturas de producción |
 | `Data/LinealyticsDbContext.cs` | Mapeo de esquemas BD |
 | `Models/*.cs` | Entidades y validaciones |
 

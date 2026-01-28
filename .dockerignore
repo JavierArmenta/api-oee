@@ -1,0 +1,17 @@
+**/.git
+**/.gitignore
+**/.vs
+**/.vscode
+**/*.*proj.user
+**/*.dbmdl
+**/*.jfm
+**/bin
+**/obj
+**/out
+**/.env
+**/node_modules
+README.md
+ARCHITECTURE.md
+*.md
+**/.DS_Store
+**/Thumbs.db
