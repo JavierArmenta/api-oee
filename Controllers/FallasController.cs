@@ -20,61 +20,6 @@ public class FallasController : ControllerBase
     }
 
     /// <summary>
-    /// Registra una falla específica en una máquina usando IDs.
-    /// La fecha y hora se calculan automáticamente por el sistema.
-    /// </summary>
-    [HttpPost("insertar")]
-    [ProducesResponseType(typeof(FallaResponse), StatusCodes.Status201Created)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<FallaResponse>> InsertarFalla([FromBody] InsertarFallaRequest request)
-    {
-        try
-        {
-            if (request.CatalogoFallaId <= 0 || request.MaquinaId <= 0)
-            {
-                return BadRequest(new FallaResponse
-                {
-                    Exitoso = false,
-                    Mensaje = "CatalogoFallaId y MaquinaId deben ser mayores a 0"
-                });
-            }
-
-            var fechaDeteccion = DateTime.UtcNow;
-            var falla = new RegistroFalla
-            {
-                CatalogoFallaId = request.CatalogoFallaId,
-                MaquinaId = request.MaquinaId,
-                FechaHoraDeteccion = fechaDeteccion,
-                Estado = "Pendiente",
-                FechaCreacion = fechaDeteccion
-            };
-
-            _context.RegistrosFalla.Add(falla);
-            await _context.SaveChangesAsync();
-
-            _logger.LogInformation("Falla {FallaRegistroId} registrada para máquina {MaquinaId} - CatalogoFallaId: {CatalogoFallaId}",
-                falla.Id, falla.MaquinaId, falla.CatalogoFallaId);
-
-            return CreatedAtAction(nameof(ObtenerUltimasFallas), new { limite = 1 }, new FallaResponse
-            {
-                Exitoso = true,
-                Mensaje = "Falla registrada exitosamente",
-                FallaRegistroId = falla.Id,
-                FechaHoraDeteccion = falla.FechaHoraDeteccion
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al insertar falla");
-            return StatusCode(500, new FallaResponse
-            {
-                Exitoso = false,
-                Mensaje = "Error interno al registrar la falla"
-            });
-        }
-    }
-
-    /// <summary>
     /// Registra una falla usando códigos de máquina y falla en lugar de IDs.
     /// La fecha y hora se calculan automáticamente por el sistema.
     /// </summary>
@@ -147,7 +92,7 @@ public class FallasController : ControllerBase
                 "Falla registrada por código - Id: {FallaRegistroId}, Máquina: {CodigoMaquina} (Id:{MaquinaId}), Falla: {CodigoFalla} (Id:{CatalogoFallaId})",
                 falla.Id, request.CodigoMaquina, maquina.Id, request.CodigoFalla, catalogoFalla.Id);
 
-            return CreatedAtAction(nameof(ObtenerUltimasFallas), new { limite = 1 }, new FallaResponse
+            return Created("", new FallaResponse
             {
                 Exitoso = true,
                 Mensaje = $"Falla '{catalogoFalla.Nombre}' registrada en máquina '{maquina.Nombre}'",
@@ -167,46 +112,22 @@ public class FallasController : ControllerBase
     }
 
     /// <summary>
-    /// Obtiene las últimas N fallas registradas
+    /// Registra una falla usando códigos desde PLC (parámetros por URL).
+    /// Endpoint alternativo para PLCs que no pueden enviar JSON.
     /// </summary>
-    /// <param name="limite">Número de registros a obtener (default: 10)</param>
-    [HttpGet("ultimas")]
-    [ProducesResponseType(typeof(List<FallaDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<List<FallaDto>>> ObtenerUltimasFallas([FromQuery] int limite = 10)
+    [HttpGet("insertar-por-codigo-plc")]
+    [ProducesResponseType(typeof(FallaResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<FallaResponse>> InsertarFallaPorCodigoPLC(
+        [FromQuery] string codigoMaquina,
+        [FromQuery] string codigoFalla)
     {
-        try
+        var request = new InsertarFallaPorCodigoRequest
         {
-            if (limite <= 0)
-            {
-                limite = 10;
-            }
-
-            if (limite > 100)
-            {
-                limite = 100;
-            }
-
-            var fallas = await _context.RegistrosFalla
-                .OrderByDescending(f => f.FechaHoraDeteccion)
-                .Take(limite)
-                .Select(f => new FallaDto
-                {
-                    Id = f.Id,
-                    CatalogoFallaId = f.CatalogoFallaId,
-                    MaquinaId = f.MaquinaId,
-                    FechaHoraDeteccion = f.FechaHoraDeteccion,
-                    Estado = f.Estado
-                })
-                .ToListAsync();
-
-            _logger.LogInformation("Se obtuvieron {Count} fallas", fallas.Count);
-
-            return Ok(fallas);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al obtener últimas fallas");
-            return StatusCode(500, new List<FallaDto>());
-        }
+            CodigoMaquina = codigoMaquina,
+            CodigoFalla = codigoFalla
+        };
+        return await InsertarFallaPorCodigo(request);
     }
 }

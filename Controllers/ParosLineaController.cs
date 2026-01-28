@@ -180,38 +180,23 @@ public class ParosLineaController : ControllerBase
     }
 
     /// <summary>
-    /// Obtiene todos los paros de línea actualmente abiertos
+    /// Registra un paro de línea desde PLC (parámetros por URL).
+    /// Endpoint alternativo para PLCs que no pueden enviar JSON.
     /// </summary>
-    [HttpGet("abiertos")]
-    [ProducesResponseType(typeof(List<ParoLineaDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<List<ParoLineaDto>>> ObtenerParosAbiertos()
+    [HttpGet("registrar-plc")]
+    [ProducesResponseType(typeof(ParoLineaResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ParoLineaResponse>> RegistrarParoLineaPLC(
+        [FromQuery] string botonera,
+        [FromQuery] string boton,
+        [FromQuery] int? operadorId = null)
     {
-        try
+        var request = new RegistrarParoLineaRequest
         {
-            var parosAbiertos = await _context.RegistrosParoBotonera
-                .Where(p => p.Estado == "Abierto")
-                .OrderByDescending(p => p.FechaHoraInicio)
-                .Select(p => new ParoLineaDto
-                {
-                    Id = p.Id,
-                    MaquinaId = p.MaquinaId,
-                    DepartamentoId = p.DepartamentoId,
-                    OperadorId = p.OperadorId,
-                    FechaHoraInicio = p.FechaHoraInicio,
-                    FechaHoraFin = p.FechaHoraFin,
-                    DuracionMinutos = p.DuracionMinutos,
-                    Estado = p.Estado
-                })
-                .ToListAsync();
-
-            _logger.LogInformation("Se obtuvieron {Count} paros abiertos", parosAbiertos.Count);
-
-            return Ok(parosAbiertos);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error al obtener paros abiertos");
-            return StatusCode(500, new List<ParoLineaDto>());
-        }
+            Botonera = botonera,
+            Boton = boton,
+            OperadorId = operadorId
+        };
+        return await RegistrarParoLinea(request);
     }
 }
