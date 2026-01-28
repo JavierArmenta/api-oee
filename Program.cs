@@ -41,7 +41,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// Swagger solo si está habilitado
+// Swagger solo si está habilitado o en Development
 var enableSwagger = Environment.GetEnvironmentVariable("ENABLE_SWAGGER")?.ToLower() == "true"
     || builder.Environment.IsDevelopment();
 
@@ -58,9 +58,20 @@ if (enableSwagger)
     });
 }
 
+// ✅ Configura Kestrel/URLs ANTES de Build()
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(5160); // HTTP
+    // Para HTTPS directo (si tienes cert):
+    // options.ListenAnyIP(8443, o => o.UseHttps("rutaCert.pfx", "password"));
+});
+
+// Opcional: también puedes publicar URLs (si no usas ConfigureKestrel):
+// builder.WebHost.UseUrls("http://0.0.0.0:5160");
+
 var app = builder.Build();
 
-// Configure the HTTP request pipeline
+// Pipeline
 if (app.Environment.IsDevelopment() && enableSwagger)
 {
     app.UseSwagger();
@@ -71,18 +82,13 @@ if (app.Environment.IsDevelopment() && enableSwagger)
     });
 }
 
+// ⚠️ Si no vas a servir HTTPS (cert), puedes comentar esto para evitar redirecciones a https
+// que fallen desde clientes externos.
+// app.UseHttpsRedirection();
 
-builder.WebHost.ConfigureKestrel(options =>
-{
-    options.ListenAnyIP(5160); // HTTP
-    // Para HTTPS:
-    // options.ListenAnyIP(8443, o => o.UseHttps("rutaCert.pfx", "password"));
-});
-
-
-app.UseHttpsRedirection();
 app.UseCors("CorsPolicy");
 app.UseAuthorization();
+
 app.MapControllers();
 
 app.Run();
